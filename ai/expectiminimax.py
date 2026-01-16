@@ -2,167 +2,150 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import inf
 from typing import Optional, Tuple
-from game.state import GameState, Player
+from game.state import GameState, Player, OUT
 from game.rules import legal_moves, apply_move, skip_turn, is_terminal
 from game.dice import roll_distribution
 from game.move import Move
+from game.constants import HAPPINESS, THREE_TRUTHS, RE_ATOUM, HORUS
 from .eval import evaluate
 
 @dataclass
 class SearchStats:
     nodes: int = 0
     leafs: int = 0
-PRINT_TREE = True
 
-def _print_node(node_type: str, depth: int, value: float, move: Optional[Move] = None, roll: Optional[int] = None, prob: Optional[float] = None):
-    if not PRINT_TREE:
-        return
+PRINT_TREE = False 
+
+def filter_suicide_moves(state: GameState, moves: list[Move], roll: int) -> list[Move]:
+    if roll in (4, 5):
+        return moves
     
-    indent = "--" * depth
-    move_str = f" | Move: {move}" if move else ""
-    roll_str = f" | Roll: {roll}" if roll is not None else ""
-    prob_str = f" | Prob: {prob:.3f}" if prob is not None else ""
-    print(f"{indent}[{node_type}] Depth: {depth} | Value: {value:.2f}{move_str}{roll_str}{prob_str}")
+    my_pieces = state.pieces_of(state.turn)
+    suicide_moves = []
+    safe_moves = []
+    
+    for mv in moves:
+        piece_pos = my_pieces[mv.piece_id]
+        if piece_pos == HAPPINESS:
+            suicide_moves.append(mv)
+        else:
+            safe_moves.append(mv)
+            
+    if safe_moves:
+        return safe_moves
+    
+    return suicide_moves
 
-def choose_best_move(state: GameState, ai_player: Player, depth: int) -> tuple[object, float, SearchStats]:
-    stats = SearchStats()
-    dist = roll_distribution()
-
-    def value_turn(s: GameState, d: int) -> Tuple[float, Optional[Move]]:
-        stats.nodes += 1
-        if d == 0 or is_terminal(s):
-            stats.leafs += 1
-            val = evaluate(s, ai_player)
-            _print_node("LEAF", d, val)
-            return val, None
-
-        exp_val = 0.0
-        for roll, prob in dist.items():
-            v, _ = value_after_roll(s, d, roll)
-            exp_val += prob * v
-            _print_node("CHANCE", d, v, roll=roll, prob=prob)
-        
-        _print_node("CHANCE", d, exp_val)
-        return exp_val, None
-
-    def value_after_roll(s: GameState, d: int, roll: int) -> Tuple[float, Optional[Move]]:
-        moves = legal_moves(s, roll)
-        if not moves:
-            s2 = skip_turn(s, roll)
-            return value_turn(s2, d - 1)
-
-        maximizing = (s.turn == ai_player)
-        node_type = "MAX" if maximizing else "MIN"
-        
-        best = -inf if maximizing else inf
-        best_move = None
-
-        for mv in moves:
-            s2 = apply_move(s, roll, mv)
-            v, _ = value_turn(s2, d - 1)
-            if maximizing:
-                if v > best:
-                    best = v
-                    best_move = mv
+def _order_moves(moves: list[Move], state: GameState, roll: int, ai_player: Player) -> list[Move]:
+    if not moves: return moves
+    from game.move import MoveKind
+    from game.rules import _occupied_map
+    from math import inf
+    
+    high_priority_promote = []
+    normal_promote = []
+    other_moves = []
+    
+    my_pieces = state.pieces_of(state.turn)
+    occ = _occupied_map(state)
+    
+    for mv in moves:
+        if mv.kind == MoveKind.PROMOTE:
+            piece_pos = my_pieces[mv.piece_id]
+            if piece_pos == HAPPINESS and roll == 5:
+                high_priority_promote.append(mv)
             else:
-                if v < best:
-                    best = v
-                    best_move = mv
-        
-        _print_node(node_type, d, best, move=best_move, roll=roll)
-        return best, best_move
-
-    root_val, _ = value_turn(state, depth)
-    return None, root_val, stats
+                normal_promote.append(mv)
+        else:
+            other_moves.append(mv)
+    
+    move_scores = []
+    maximizing = (state.turn == ai_player)
+    
+    for mv in other_moves:
+        try:
+            s2 = apply_move(state, roll, mv)
+            score = evaluate(s2, ai_player)
+            
+            piece_pos = my_pieces[mv.piece_id]
+            to_pos = piece_pos + roll
+            
+            if to_pos in occ and occ[to_pos][0] != state.turn and to_pos <= HAPPINESS:
+                score += 20000000.0 if maximizing else -20000000.0
+            
+            if to_pos >= 20 and to_pos < 26:
+                for op_pos in state.pieces_of(Player.WHITE if state.turn == Player.BLACK else Player.BLACK):
+                    if op_pos != OUT and op_pos < to_pos and op_pos >= 20:
+                        score += 10000000.0 if maximizing else -10000000.0
+                        break
+            
+            move_scores.append((score, mv))
+        except:
+            move_scores.append((-inf if maximizing else inf, mv))
+    
+    move_scores.sort(reverse=maximizing, key=lambda x: x[0])
+    ordered_other = [mv for _, mv in move_scores]
+    
+    return high_priority_promote + normal_promote + ordered_other
 
 def choose_best_move_given_roll(state: GameState, ai_player: Player, depth: int, roll: int) -> tuple[object, float, SearchStats]:
     stats = SearchStats()
     dist = roll_distribution()
 
-    def value_turn(s: GameState, d: int, alpha: float = -inf, beta: float = inf) -> Tuple[float, Optional[Move]]:
+    def value_turn(s: GameState, d: int, alpha: float, beta: float) -> Tuple[float, Optional[Move]]:
         stats.nodes += 1
         if d == 0 or is_terminal(s):
             stats.leafs += 1
-            val = evaluate(s, ai_player)
-            _print_node("LEAF", d, val)
-            return val, None
-
+            return evaluate(s, ai_player), None
         exp_val = 0.0
         for r, p in dist.items():
             v, _ = value_after_roll(s, d, r, alpha, beta)
             exp_val += p * v
-            _print_node("CHANCE", d, v, roll=r, prob=p)
-        
-        _print_node("CHANCE", d, exp_val)
         return exp_val, None
 
-    def value_after_roll(s: GameState, d: int, r: int, alpha: float = -inf, beta: float = inf) -> Tuple[float, Optional[Move]]:
-        moves = legal_moves(s, r)
+    def value_after_roll(s: GameState, d: int, r: int, alpha: float, beta: float) -> Tuple[float, Optional[Move]]:
+        raw_moves = legal_moves(s, r)
+        moves = filter_suicide_moves(s, raw_moves, r) if s.turn == ai_player else raw_moves
+
         if not moves:
             return value_turn(skip_turn(s, r), d - 1, alpha, beta)
 
         maximizing = (s.turn == ai_player)
-        node_type = "MAX" if maximizing else "MIN"
-        
         best = -inf if maximizing else inf
         best_move = None
+        if d >= 1: moves = _order_moves(moves, s, r, ai_player)
 
         for mv in moves:
             s2 = apply_move(s, r, mv)
             v, _ = value_turn(s2, d - 1, alpha, beta)
-            
             if maximizing:
-                if v > best:
-                    best = v
-                    best_move = mv
-                if best >= beta:
-                    _print_node(f"{node_type}(PRUNED)", d, best, move=best_move, roll=r)
-                    return best, best_move
+                if v > best: best, best_move = v, mv
                 alpha = max(alpha, best)
             else:
-                if v < best:
-                    best = v
-                    best_move = mv
-                if best <= alpha:
-                    _print_node(f"{node_type}(PRUNED)", d, best, move=best_move, roll=r)
-                    return best, best_move
+                if v < best: best, best_move = v, mv
                 beta = min(beta, best)
-        
-        _print_node(node_type, d, best, move=best_move, roll=r)
+            if beta <= alpha: break
         return best, best_move
 
-    moves = legal_moves(state, roll)
+    raw_moves = legal_moves(state, roll)
+    moves = filter_suicide_moves(state, raw_moves, roll) if state.turn == ai_player else raw_moves
+
     if not moves:
-        val, _ = value_turn(skip_turn(state, roll), depth - 1)
+        val, _ = value_turn(skip_turn(state, roll), depth - 1, -inf, inf)
         return None, val, stats
 
-    maximizing = (state.turn == ai_player)
-    node_type = "MAX" if maximizing else "MIN"
+    moves = _order_moves(moves, state, roll, ai_player)
     
-    best_mv = None
-    best_val = -inf if maximizing else inf
-    alpha = -inf
-    beta = inf
-
+    best_mv, best_val = None, -inf
+    alpha, beta = -inf, inf
+    
     for mv in moves:
         s2 = apply_move(state, roll, mv)
         v, _ = value_turn(s2, depth - 1, alpha, beta)
-        if maximizing:
-            if v > best_val:
-                best_val = v
-                best_mv = mv
-            if best_val >= beta:
-                _print_node(f"{node_type}(PRUNED)", depth, best_val, move=best_mv, roll=roll)
-                return best_mv, best_val, stats
-            alpha = max(alpha, best_val)
-        else:
-            if v < best_val:
-                best_val = v
-                best_mv = mv
-            if best_val <= alpha:
-                _print_node(f"{node_type}(PRUNED)", depth, best_val, move=best_mv, roll=roll)
-                return best_mv, best_val, stats
-            beta = min(beta, best_val)
+        if v > best_val: 
+            best_val, best_mv = v, mv
+        alpha = max(alpha, best_val)
+        if best_val >= beta:
+            break
     
-    _print_node(node_type, depth, best_val, move=best_mv, roll=roll)
     return best_mv, best_val, stats
