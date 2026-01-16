@@ -112,20 +112,13 @@ def _apply_swap_if_needed(state: GameState, mover: Player, from_sq: int, to_sq: 
     return state
 
 def _happiness_block_rule(from_sq: int, to_sq: int) -> bool:
-    """
-    Absolute rule:
-    If moving would cross beyond 26 without landing exactly on 26 => illegal.
-    I.e., if from < 26 and to > 26 then only legal if to == 26.
-    """
+  
     if from_sq < HAPPINESS and to_sq > HAPPINESS:
         return False  # would jump over happiness
     return True
 
 def legal_moves(state: GameState, roll: int) -> list[Move]:
-    """
-    Returns list of legal moves for the current player for a given roll in 1..5.
-    Includes PROMOTE moves (from 26 with roll 5, or pending-exit squares).
-    """
+
     if is_terminal(state):
         return []
 
