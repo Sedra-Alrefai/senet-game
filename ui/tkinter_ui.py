@@ -31,6 +31,7 @@ class UiState:
     ai_move_from: int | None = None
     ai_move_to: int | None = None
     available_promote_pieces: list[int] | None = None
+    print_algorithm_info: bool = False
 
 
 class SenetTkUI:
@@ -43,7 +44,73 @@ class SenetTkUI:
 
         self._build_layout()
         self._render_all()
+        self.root.update()
+        self.root.update_idletasks()
+        self._ask_print_option()
         self._check_end_or_prompt()
+    
+    def _ask_print_option(self):
+ 
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Print Options")
+        dialog.geometry("450x180")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        dialog.update_idletasks()
+        # Center dialog over main window
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_width = self.root.winfo_width()
+        main_height = self.root.winfo_height()
+        dialog_width = dialog.winfo_width()
+        dialog_height = dialog.winfo_height()
+        
+        x = main_x + (main_width // 2) - (dialog_width // 2)
+        y = main_y + (main_height // 2) - (dialog_height // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        tk.Label(
+            dialog, 
+            text="Do you want to print algorithm search information?\n(Number of nodes, evaluation values, search tree)",
+            font=("Arial", 11),
+            justify=tk.CENTER
+        ).pack(pady=20)
+        
+        choice_var = tk.BooleanVar(value=False)
+        
+        frame = tk.Frame(dialog)
+        frame.pack(pady=10)
+        
+        tk.Radiobutton(
+            frame, 
+            text="Yes - Print Information", 
+            variable=choice_var, 
+            value=True,
+            font=("Arial", 10)
+        ).pack(side=tk.LEFT, padx=10)
+        
+        tk.Radiobutton(
+            frame, 
+            text="No - No Printing", 
+            variable=choice_var, 
+            value=False,
+            font=("Arial", 10)
+        ).pack(side=tk.LEFT, padx=10)
+        
+        def on_ok():
+            self.ui.print_algorithm_info = choice_var.get()
+            dialog.destroy()
+        
+        tk.Button(
+            dialog, 
+            text="OK", 
+            command=on_ok,
+            font=("Arial", 10, "bold"),
+            width=10
+        ).pack(pady=10)
+        
+        dialog.wait_window()
 
     def _build_layout(self):
         top = tk.Frame(self.root)
@@ -554,9 +621,27 @@ class SenetTkUI:
 
         search_depth = self.depth_var.get()
 
-        mv, val, stats = choose_best_move_given_roll(self.state, AI_PLAYER, search_depth, roll)
+        mv, val, stats = choose_best_move_given_roll(self.state, AI_PLAYER, search_depth, roll, self.ui.print_algorithm_info)
 
         self.ui.last_ai_nodes = stats.nodes
+        
+        # Print algorithm information if requested
+        if self.ui.print_algorithm_info:
+            print("\n" + "="*80)
+            print(f"AI MOVE - Roll: {roll}, Depth: {search_depth}")
+            print("="*80)
+            print(f"Nodes explored: {stats.nodes}")
+            print(f"Leaf nodes: {stats.leafs}")
+            print(f"Chosen evaluation value: {stats.chosen_eval_value:.2f}")
+            if mv:
+                move_str = f"piece#{mv.piece_id} {mv.kind.value}"
+                print(f"Best move: {move_str}")
+            else:
+                print("Best move: None (Skip)")
+            print("\n--- Search Tree ---")
+            for info in stats.tree_info:
+                print(info)
+            print("="*80 + "\n")
 
         if mv is None:
             self.state = skip_turn(self.state, roll)
