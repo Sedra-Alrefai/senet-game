@@ -3,100 +3,49 @@ from game.state import GameState, Player, OUT
 from game.constants import HAPPINESS, WATER, HORUS, THREE_TRUTHS, RE_ATOUM, REBIRTH
 from game.rules import _occupied_map
 
-WEIGHT_PROMOTED = 200000000.0     
-WEIGHT_HAPPINESS_STAY = 50000000.0
-WEIGHT_HORUS_STAY = 80000000.0     
-
-WEIGHT_OP_ON_HAPPINESS = -300000000.0 
-WEIGHT_DANGER_ZONE = -100000000.0  
-WEIGHT_TRAFFIC_JAM = -20000000.0
-
-WEIGHT_BLOCKING_OP = 15000000.0
-WEIGHT_ADVANCED_POSITION = 3000000.0
-WEIGHT_REBIRTH_PENALTY = -50000000.0
-WEIGHT_OP_REBIRTH_BONUS = 20000000.0
-WEIGHT_NEAR_PROMOTION = 40000000.0
-WEIGHT_OP_BLOCKED = 10000000.0
+W_WIN = 20000000.0        
+W_KILL = 50000.0           
+W_VANGUARD = 4000.0        
+W_BLOCKING = 3000.0       
+W_BRIDGE = 1500.0          
+W_SAFETY = 2000.0          
+W_DANGER_OP = -10000.0     
 
 def evaluate(state: GameState, ai_player: Player) -> float:
-    my_pieces = state.pieces_of(ai_player)
+    my_pieces = sorted([p for p in state.pieces_of(ai_player) if p != OUT])
     opponent = Player.WHITE if ai_player == Player.BLACK else Player.BLACK
-    op_pieces = state.pieces_of(opponent)
-    occ = _occupied_map(state)
-
+    op_pieces = sorted([p for p in state.pieces_of(opponent) if p != OUT])
+    
     score = 0.0
+    my_out_count = 7 - len(my_pieces)
+    op_out_count = 7 - len(op_pieces)
+    score += (my_out_count * W_WIN)
+    score -= (op_out_count * W_WIN * 1.5) 
+    vanguard_count = min(3, len(my_pieces))
+    vanguard_pieces = my_pieces[-vanguard_count:] if vanguard_count > 0 else []
 
-    my_out = sum(1 for p in my_pieces if p == OUT)
-    op_out = sum(1 for p in op_pieces if p == OUT)
-    score += my_out * WEIGHT_PROMOTED
-    score += op_out * -50000000.0
-
-    if any(p == HAPPINESS for p in op_pieces):
-        score += WEIGHT_OP_ON_HAPPINESS 
-
-    my_on_happiness = False
-    waiting_behind_happiness = 0
-    my_advanced_count = 0
-    op_blocked_count = 0
     for p in my_pieces:
-        if p == OUT: continue
-
-        if p == HAPPINESS:
-            my_on_happiness = True
-            score += WEIGHT_HAPPINESS_STAY
+        if p == 27: score -= 5000000.0 
         
-        elif p == HORUS:
-            score += WEIGHT_HORUS_STAY
-
-        elif p == WATER or p in (27, 28, 29):
-            score += WEIGHT_DANGER_ZONE
-
-        elif p in (THREE_TRUTHS, RE_ATOUM):
-            score += WEIGHT_NEAR_PROMOTION
-
-        elif p == REBIRTH:
-            score += WEIGHT_REBIRTH_PENALTY
-
+        if p in vanguard_pieces:
+            score += (p * W_VANGUARD) 
+            if p >= 26: score += 50000.0
         else:
-            if p >= 20: 
-                score += p * 50000
-                my_advanced_count += 1
-                if p < 26: 
-                    waiting_behind_happiness += 1
-                if p >= 23:
-                    score += WEIGHT_ADVANCED_POSITION
-            else: 
-                score += p * 1000
+            score += (p * 10.0)
 
-    for p in op_pieces:
-        if p == OUT: continue
+    op_threat_level = 0
+    for op in op_pieces:
+        if op >= 24 and op <= 26:
+            op_threat_level += op
+            score -= (op * 5000.0) 
 
-        if p == HAPPINESS:
-            score += WEIGHT_OP_ON_HAPPINESS
-
-        elif p == REBIRTH:
-            score += WEIGHT_OP_REBIRTH_BONUS
-
-        elif p in (THREE_TRUTHS, RE_ATOUM, HORUS):
-            score -= 40000000.0
-
-        elif p >= 20:
-            score -= p * 40000
-            if p < 26:
-                for my_pos in my_pieces:
-                    if my_pos != OUT and my_pos > p and my_pos <= 26:
-                        op_blocked_count += 1
-                        score += WEIGHT_OP_BLOCKED
-                        break
-
-    if op_blocked_count > 0:
-        score += op_blocked_count * WEIGHT_BLOCKING_OP
-
-    if my_on_happiness and waiting_behind_happiness > 0:
-        score += (waiting_behind_happiness * WEIGHT_TRAFFIC_JAM)
-
-    op_advanced = sum(1 for p in op_pieces if p != OUT and p >= 20)
-    if my_advanced_count > op_advanced:
-        score += (my_advanced_count - op_advanced) * 5000000.0
+    for i in range(len(my_pieces) - 1):
+        if my_pieces[i] + 1 == my_pieces[i+1]:
+            if my_pieces[i] < 22:
+                score += W_BRIDGE
+            else:
+                score -= 1000.0 
+    op_total_progress = sum(p for p in op_pieces)
+    score -= (op_total_progress * 200.0)
 
     return score
